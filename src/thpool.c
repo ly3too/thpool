@@ -8,6 +8,7 @@
 #include <semaphore.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static volatile int keepalive; // enable main loop
 static volatile int num_threads; // number of worker threads
@@ -17,7 +18,7 @@ pthread_cond_t finished_jobque; // free thpool wati condition
 
 typedef struct job{
     struct job *next;
-    void (func*) (void *arg);
+    void (*func) (void *arg);
     void * arg;
 } job_t;
 
@@ -28,40 +29,45 @@ typedef struct {
     int len;
 } jobque_t;
 
-volatile jobque_t jobque;
+jobque_t jobque;
+
+void free_job(job_t * job) {
+    free(job -> arg);
+    free(job);
+}
 
 int jobque_init(jobque_t* p_que) {
     pthread_mutex_lock(&(p_que -> lock));
     p_que -> head = NULL;
     p_que -> tail = NULL;
-    p_que -> size = 0;
+    p_que -> len = 0;
     pthread_mutex_unlock(&(p_que -> lock));
     return 0;
 }
 
 int jobque_push(jobque_t* p_que, job_t *p_job) {
     pthread_mutex_lock(&(p_que -> lock));
-        if (p_que -> size == 0) {
+        if (p_que -> len == 0) {
             p_que -> head = p_que -> tail = p_job;
         } else {
             (p_que -> tail) -> next = p_job;
             p_job -> next = NULL;
             p_que -> tail = p_job;
         }
-        ++ (p_que -> size);
+        ++ (p_que -> len);
     pthread_mutex_unlock(&(p_que -> lock));
     return 0;
 }
 
-job_t *p_job jobque_pop(jobque_t* p_que) {
+job_t *jobque_pop(jobque_t* p_que) {
     job_t * new_job = NULL;
     pthread_mutex_lock(&(p_que -> lock));
 
-    if (p_que -> size > 0) {
+    if (p_que -> len > 0) {
         new_job = p_que -> head;
         p_que -> head = new_job -> next;
         new_job -> next = NULL;
-        -- p_que -> size;
+        -- p_que -> len;
     }
 
     pthread_mutex_unlock(&(p_que -> lock));
@@ -71,7 +77,7 @@ job_t *p_job jobque_pop(jobque_t* p_que) {
 int jobque_size(jobque_t* p_que) {
     int size = 0;
     pthread_mutex_lock(&(p_que -> lock));
-    size = p_que -> size;
+    size = p_que -> len;
     pthread_mutex_unlock(&(p_que -> lock));
     return size;
 }
@@ -82,17 +88,12 @@ void jobque_destroy(jobque_t* p_que) {
     while (p_que) {
         job_t *job = p_que -> head;
         p_que -> head = p_que -> head -> next;
-        free(job);
+        free_job(job);
     }
-    p_que -> size = 0;
+    p_que -> len = 0;
 
     pthread_mutex_unlock(&(p_que -> lock));
     pthread_mutex_destroy(p_que -> lock);
-}
-
-void free_job(job_t * job) {
-    free(job -> arg);
-    free(job);
 }
 
 /* main worker threads */
@@ -108,9 +109,12 @@ void* worker (void *arg) {
             pthread_cond_signal(&finished_jobque);
         }
     }
+
+    return NULL;
 }
 
-int thpool_add_job(void (func*) (void *arg), void *arg) {
+/* add job to jobque, arg will be freed after task finshed */
+int thpool_add_job(void (*func) (void *arg), void *arg) {
     sem_wait(job_slots);
     job_t *new_job = (job_t *)malloc(sizeof(job_t));
     if (new_job == NULL) {
@@ -127,6 +131,8 @@ int thpool_add_job(void (func*) (void *arg), void *arg) {
         return -1;
     }
     sem_post(has_jobs);
+
+    return 0;
 }
 
 
@@ -141,7 +147,7 @@ int thpool_init(int num_th, int que_size) {
     num_threads = num_th;
     sem_init(&has_jobs, 0, 0);
     sem_init(&job_slots, 0, que_size);
-    p_threads = (pthreads_t *)malloc(num_th * sizeof(pthread_t));
+    p_threads = (pthread_t *)malloc(num_th * sizeof(pthread_t));
     if (p_threads == NULL) {
         perror("cannot creat threads id array");
         return -1;
@@ -156,20 +162,23 @@ int thpool_init(int num_th, int que_size) {
     pthread_cond_init(&finished_jobque, NULL);
     /*creating process*/
     for (int i=0; i<num_th; ++i) {
-        if (pthread_create(p_threads[i], NULL, &worker, NULL) != 0) {
+        if (pthread_create(&(p_threads[i]), NULL, &worker, NULL) != 0) {
             perror("creating pthread failed");
             return -1;
         }
     }
+
+    return 0;
 }
 
 /* wait jobs to be finished in jobque and free thread pool */
 void thpool_destroy() {
+    void* retval;
     sem_post(job_slots);
-    pthread_cond_wait(finished_jobque);
+    pthread_cond_wait(&finished_jobque, NULL);
     keepalive = 0;
     for (int i=0; i<num_threads; ++i) {
-        ptread_join(p_threads[i]);
+        pthread_join(p_threads[i], &retval);
     }
 
     jobque_destroy(&jobque);
@@ -177,5 +186,5 @@ void thpool_destroy() {
 
     sem_destroy(has_jobs);
     sem_destroy(job_slots);
-    pthread_cond_destroy(finished_jobque);
+    pthread_cond_destroy(&finished_jobque);
 }
