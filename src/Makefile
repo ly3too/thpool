@@ -7,6 +7,9 @@ EXECUTABLE=example
 
 all: $(SOURCES) $(EXECUTABLE)
 
+debug: CFLAGS += -DDEBUG -g -DDEBUG_THPOOL
+debug: all
+
 $(EXECUTABLE): $(OBJECTS)
 	$(CC) $(LDFLAGS) $(OBJECTS) -o $@
 

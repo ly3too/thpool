@@ -10,6 +10,12 @@
 extern "C" {
 #endif
 
+#ifdef DEBUG_THPOOL
+    #define DEBUG_FUNC(func, arg) func arg
+#else
+    #define DEBUG_FUNC(func, arg) do{} while(0)
+#endif
+
 /**/
 int thpool_init(int num_th, int que_size);
 
